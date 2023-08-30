@@ -11,6 +11,7 @@ import numpy as np
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device = torch.cuda.set_device(0)
 
+
 class Dim(IntEnum):
     batch = 0
     seq = 1
@@ -18,7 +19,7 @@ class Dim(IntEnum):
 
 
 class AKT(nn.Module):
-    def __init__(self, n_question, n_pid, d_model, n_blocks,
+    def __init__(self, n_question, n_pid, d_model, n_blocks,q_embed_dim,
                  kq_same, dropout, model_type, final_fc_dim=512, n_heads=8, d_ff=2048, l2=1e-5, separate_qa=False):
         super().__init__()
         """
@@ -35,28 +36,34 @@ class AKT(nn.Module):
         self.l2 = l2
         self.model_type = model_type
         self.separate_qa = separate_qa
+        self.q_embed_dim = q_embed_dim
         embed_l = d_model
-        if self.n_pid > 0:#难度嵌入
+        if self.n_pid > 0:  # 难度嵌入
             self.difficult_param = nn.Embedding(self.n_pid + 1, 1)
             self.q_embed_diff = nn.Embedding(self.n_question + 1, embed_l)
             self.qa_embed_diff = nn.Embedding(2 * self.n_question + 1, embed_l)
         # n_question+1 ,d_model
-        self.q_embed = nn.Embedding(self.n_question + 1, embed_l)
+        self.q_embed = nn.Embedding(self.n_question + 1, embed_l) # 知识点嵌入
         if self.separate_qa:
-            self.qa_embed = nn.Embedding(2 * self.n_question + 1, embed_l)
+            self.qa_embed = nn.Embedding(2 * self.n_question + 1, embed_l)  # f_(ct,rt)
         else:
             self.qa_embed = nn.Embedding(2, embed_l)
+
         # Architecture Object. It contains stack of attention block
         self.model = Architecture(n_question=n_question, n_blocks=n_blocks, n_heads=n_heads, dropout=dropout,
                                   d_model=d_model, d_feature=d_model / n_heads, d_ff=d_ff, kq_same=self.kq_same,
                                   model_type=self.model_type)
-
+        self.distout = nn.Sequential(
+            nn.Linear(embed_l, q_embed_dim), nn.ReLU(), nn.Dropout(self.dropout),
+        )
+        self.diffout = nn.Sequential(
+            nn.Linear(embed_l, q_embed_dim), nn.ReLU(), nn.Dropout(self.dropout),
+        )
         self.out = nn.Sequential(
             nn.Linear(d_model + embed_l, final_fc_dim), nn.ReLU(), nn.Dropout(self.dropout),
-            nn.Linear(final_fc_dim, 256), nn.ReLU(), nn.Dropout(self.dropout),
-            nn.Linear(256, 1),
+            # nn.Linear(final_fc_dim, 256), nn.ReLU(), nn.Dropout(self.dropout),
+            nn.Linear(final_fc_dim, q_embed_dim), nn.ReLU(), nn.Dropout(self.dropout),
         )
-
         self.reset()
 
     def reset(self):
@@ -66,27 +73,25 @@ class AKT(nn.Module):
 
     def forward(self, q_data, qa_data, target, pid_data=None):
         # Batch First
-        q_embed_data = self.q_embed(q_data)  # BS, seqlen,  d_model# c_ct知识点嵌入
+        q_embed_data = self.q_embed(q_data)  # [BS,seqlen,d_model] c_ct知识点嵌入
         if self.separate_qa:
-            # BS, seqlen, d_model #f_(ct,rt)
             qa_embed_data = self.qa_embed(qa_data)  # 嵌入
         else:
             qa_data = torch.div(qa_data - q_data, self.n_question, rounding_mode='floor')  # rt
-            # BS, seqlen, d_model # c_ct+ g_rt =e_(ct,rt)
+            # [BS,seqlen,d_model] # c_ct+ g_rt =e_(ct,rt)  概念-响应嵌入
             qa_embed_data = self.qa_embed(qa_data) + q_embed_data
 
         if self.n_pid > 0:
-            q_embed_diff_data = self.q_embed_diff(q_data)  # d_ct
-            pid_embed_data = self.difficult_param(pid_data)  # uq
-            q_embed_data = q_embed_data + pid_embed_data * \
-                           q_embed_diff_data  # uq *d_ct + c_ct，重要公式
-            qa_embed_diff_data = self.qa_embed_diff(qa_data)  # f_(ct,rt) or #h_rt
+            q_embed_diff_data = self.q_embed_diff(q_data)  # d_ct 概括了涵盖这个概念的问题的变化
+            pid_embed_data = self.difficult_param(pid_data)  # uq 控制这个问题与它所涵盖的概念的偏离程度
+            q_embed_data = q_embed_data + pid_embed_data * q_embed_diff_data  # c_ct + uq*d_ct，重要公式 Xt
+            qa_embed_diff_data = self.qa_embed_diff(qa_data)  # f_(ct,rt) or #h_rt [BS,seqlen,d_model]
             if self.separate_qa:
                 qa_embed_data = qa_embed_data + pid_embed_data * \
                                 qa_embed_diff_data  # uq* f_(ct,rt) + e_(ct,rt)
             else:
                 qa_embed_data = qa_embed_data + pid_embed_data * \
-                                (qa_embed_diff_data + q_embed_diff_data)  # + uq *(h_rt+d_ct)
+                                (qa_embed_diff_data + q_embed_diff_data) # e_(ct,rt) + uq*(h_rt+d_ct)重要公式 yt
             c_reg_loss = (pid_embed_data ** 2.).sum() * self.l2
         else:
             c_reg_loss = 0.
@@ -94,9 +99,10 @@ class AKT(nn.Module):
         # BS.seqlen,d_model
         # Pass to the decoder
         # output shape BS,seqlen,d_model or d_model//2
-        d_output = self.model(q_embed_data, qa_embed_data)  # 211x512
-
-        concat_q = torch.cat([d_output, q_embed_data], dim=-1)
+        dist = self.distout(q_embed_data) # [24,200,110]
+        diff = self.diffout(qa_embed_data) # [24,200,110]
+        d_output = self.model(q_embed_data, qa_embed_data)  # [24,200,256]
+        concat_q = torch.cat([d_output, q_embed_data], dim=-1)  # [24,200,512]
         output = self.out(concat_q)
         labels = target.reshape(-1)
         m = nn.Sigmoid()

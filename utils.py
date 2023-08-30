@@ -61,7 +61,8 @@ def load_model(params):
 
     if model_type in {'akt'}:
         model = AKT(n_question=params.n_question, n_pid=params.n_pid, n_blocks=params.n_block, d_model=params.d_model,
-                    dropout=params.dropout, kq_same=params.kq_same, model_type=model_type, l2=params.l2).to(device)
+                    dropout=params.dropout, kq_same=params.kq_same, q_embed_dim=params.q_embed_dim,
+                    model_type=model_type, l2=params.l2).to(device)
     else:
         model = None
     return model

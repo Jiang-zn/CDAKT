@@ -15,6 +15,8 @@ import os
 
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device = torch.cuda.set_device(0)
+
+
 # assert torch.cuda.is_available(), "No Cuda available, AssertionError"
 
 
@@ -148,7 +150,7 @@ if __name__ == '__main__':
     parser.add_argument('--l2', type=float, default=1e-5, help='l2 penalty for difficulty')
 
     # DKT-VMN Specific  Parameter
-    parser.add_argument('--q_embed_dim', type=int, default=50, help='question embedding dimensions')
+    parser.add_argument('--q_embed_dim', type=int, default=110, help='question embedding dimensions')
     parser.add_argument('--qa_embed_dim', type=int, default=256, help='answer and question embedding dimensions')
     parser.add_argument('--memory_size', type=int, default=50, help='memory size')
     parser.add_argument('--init_std', type=float, default=0.1, help='weight initialization std')
@@ -211,8 +213,8 @@ if __name__ == '__main__':
 
     # Train- Test,参数打印
     d = vars(params)
-    for key in d:
-        print('\t', key, '\t', d[key])
+    # for key in d:
+    #     print('\t', key, '\t', d[key])
     file_name = ''
     for item_ in file_name_identifier:
         file_name = file_name + item_[0] + str(item_[1])
