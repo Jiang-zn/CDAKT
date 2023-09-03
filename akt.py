@@ -19,7 +19,7 @@ class Dim(IntEnum):
 
 
 class AKT(nn.Module):
-    def __init__(self, n_question, n_pid, d_model, n_blocks,q_embed_dim,
+    def __init__(self, n_question, n_pid, d_model, n_blocks, q_embed_dim,
                  kq_same, dropout, model_type, final_fc_dim=512, n_heads=8, d_ff=2048, l2=1e-5, separate_qa=False):
         super().__init__()
         """
@@ -43,7 +43,7 @@ class AKT(nn.Module):
             self.q_embed_diff = nn.Embedding(self.n_question + 1, embed_l)
             self.qa_embed_diff = nn.Embedding(2 * self.n_question + 1, embed_l)
         # n_question+1 ,d_model
-        self.q_embed = nn.Embedding(self.n_question + 1, embed_l) # 知识点嵌入
+        self.q_embed = nn.Embedding(self.n_question + 1, embed_l)  # 知识点嵌入
         if self.separate_qa:
             self.qa_embed = nn.Embedding(2 * self.n_question + 1, embed_l)  # f_(ct,rt)
         else:
@@ -54,15 +54,16 @@ class AKT(nn.Module):
                                   d_model=d_model, d_feature=d_model / n_heads, d_ff=d_ff, kq_same=self.kq_same,
                                   model_type=self.model_type)
         self.distout = nn.Sequential(
-            nn.Linear(embed_l, q_embed_dim), nn.ReLU(), nn.Dropout(self.dropout),
+            nn.Linear(embed_l, 1), nn.ReLU(), nn.Dropout(self.dropout),
         )
         self.diffout = nn.Sequential(
-            nn.Linear(embed_l, q_embed_dim), nn.ReLU(), nn.Dropout(self.dropout),
+            nn.Linear(embed_l, 1), nn.ReLU(), nn.Dropout(self.dropout),
         )
         self.out = nn.Sequential(
             nn.Linear(d_model + embed_l, final_fc_dim), nn.ReLU(), nn.Dropout(self.dropout),
-            # nn.Linear(final_fc_dim, 256), nn.ReLU(), nn.Dropout(self.dropout),
-            nn.Linear(final_fc_dim, q_embed_dim), nn.ReLU(), nn.Dropout(self.dropout),
+            nn.Linear(final_fc_dim, 256), nn.ReLU(), nn.Dropout(self.dropout),
+            nn.Linear(256, 1),
+            # nn.Linear(final_fc_dim, q_embed_dim), nn.ReLU(), nn.Dropout(self.dropout),
         )
         self.reset()
 
@@ -91,7 +92,7 @@ class AKT(nn.Module):
                                 qa_embed_diff_data  # uq* f_(ct,rt) + e_(ct,rt)
             else:
                 qa_embed_data = qa_embed_data + pid_embed_data * \
-                                (qa_embed_diff_data + q_embed_diff_data) # e_(ct,rt) + uq*(h_rt+d_ct)重要公式 yt
+                                (qa_embed_diff_data + q_embed_diff_data)  # e_(ct,rt) + uq*(h_rt+d_ct)重要公式 yt
             c_reg_loss = (pid_embed_data ** 2.).sum() * self.l2
         else:
             c_reg_loss = 0.
@@ -99,14 +100,36 @@ class AKT(nn.Module):
         # BS.seqlen,d_model
         # Pass to the decoder
         # output shape BS,seqlen,d_model or d_model//2
-        dist = self.distout(q_embed_data) # [24,200,110]
-        diff = self.diffout(qa_embed_data) # [24,200,110]
+        dist = self.distout(q_embed_data)  # [24,200,1]
+        diff = self.diffout(qa_embed_data)  # [24,200,1]
         d_output = self.model(q_embed_data, qa_embed_data)  # [24,200,256]
         concat_q = torch.cat([d_output, q_embed_data], dim=-1)  # [24,200,512]
-        output = self.out(concat_q)
+        output = self.out(concat_q)  # [24,200,1]，知识掌握情况θ
+        # 计算猜测率g=no_master_right/no_master_total
+        # 没有掌握知识点情况下回答正确的次数no_master_right,对每一个时刻，都计算先前时刻的情况
+        # 没有掌握知识点情况下的总回答次数no_master_total
+        no_master_right = torch.empty_like(q_data)  # 假设 no_master_right 的形状
+        no_master_total = torch.empty_like(q_data)  # 假设 no_master_total 的形状
+        # no_master_total中dim=1维度的值依次由1到200
+        no_master_total = torch.cumsum(torch.ones_like(q_data), dim=1)
+        # output转换为0至1之间的概率值
+        output = torch.sigmoid(output)
+
+        correct_answers = (target == 1).float()
+        dist = dist.squeeze(dim=-1)
+        diff = diff.squeeze(dim=-1)
+        output = output.squeeze(dim=-1)
+        no_master = (output <= 0.5).float()
+        no_master_right = torch.cumsum(correct_answers * no_master, dim=1)  # 回答正确的情况*相应时刻未掌握知识点情况，沿时间步累积
+        guessing_rate = torch.div(no_master_right, no_master_total)
+
+        # 预测结果计算公式
+        # P=g*(1-dist)+(1-g)*sigmoid(-1.7dist(θ-diff))
+        P = guessing_rate * (1 - dist) + (1 - guessing_rate) * torch.sigmoid(output - diff)
         labels = target.reshape(-1)
         m = nn.Sigmoid()
-        preds = (output.reshape(-1))  # logit
+        # preds = (output.reshape(-1))  # logit
+        preds = (P.reshape(-1))  # logit
         mask = labels > -0.9
         masked_labels = labels[mask].float()
         masked_preds = preds[mask]
@@ -156,11 +179,11 @@ class Architecture(nn.Module):
             y = block(mask=1, query=y, key=y, values=y)
         flag_first = True
         for block in self.blocks_2:
-            if flag_first:  # peek current question
+            if flag_first:  # peek current question,允许查看当前时刻的问题
                 x = block(mask=1, query=x, key=x,
                           values=x, apply_pos=False)
                 flag_first = False
-            else:  # dont peek current response
+            else:  # dont peek current response，不允许查看当前时刻的响应
                 x = block(mask=0, query=x, key=x, values=y, apply_pos=True)
                 flag_first = True
         return x
@@ -171,7 +194,8 @@ class TransformerLayer(nn.Module):
                  d_ff, n_heads, dropout, kq_same):
         super().__init__()
         """
-            This is a Basic Block of Transformer paper. It containts one Multi-head attention object. Followed by layer norm and postion wise feedforward net and dropout layer.
+        This is a Basic Block of Transformer paper. It containts one Multi-head attention object. 
+        Followed by layer norm and postion wise feedforward net and dropout layer.
         """
         kq_same = kq_same == 1
         # Multi-Head Attention Block
@@ -179,14 +203,13 @@ class TransformerLayer(nn.Module):
             d_model, d_feature, n_heads, dropout, kq_same=kq_same)
 
         # Two layer norm layer and two droput layer
+        self.linear1 = nn.Linear(d_model, d_ff)
         self.layer_norm1 = nn.LayerNorm(d_model)
         self.dropout1 = nn.Dropout(dropout)
-
-        self.linear1 = nn.Linear(d_model, d_ff)
         self.activation = nn.ReLU()
         self.dropout = nn.Dropout(dropout)
-        self.linear2 = nn.Linear(d_ff, d_model)
 
+        self.linear2 = nn.Linear(d_ff, d_model)
         self.layer_norm2 = nn.LayerNorm(d_model)
         self.dropout2 = nn.Dropout(dropout)
 
@@ -302,7 +325,9 @@ def attention(q, k, v, d_k, mask, dropout, zero_pad, gamma=None):
     scores = torch.matmul(q, k.transpose(-2, -1)) / \
              math.sqrt(d_k)  # BS, 8, seqlen, seqlen
     bs, head, seqlen = scores.size(0), scores.size(1), scores.size(2)
-
+    # 这两个矩阵的每个元素代表了序列中的位置信息
+    # x1 是一个递增的序列，x2 是 x1 的转置
+    # 这两个矩阵被用来计算位置效应的位置矩阵
     x1 = torch.arange(seqlen).expand(seqlen, -1).to(device)
     x2 = x1.transpose(0, 1).contiguous()
 
@@ -310,12 +335,21 @@ def attention(q, k, v, d_k, mask, dropout, zero_pad, gamma=None):
         scores_ = scores.masked_fill(mask == 0, -1e32)
         scores_ = F.softmax(scores_, dim=-1)  # BS,8,seqlen,seqlen
         scores_ = scores_ * mask.float().to(device)
+        # torch.cumsum(input, dim, dtype=None) 计算输入张量的累积和以及总和
+        # 示例
+        # x = torch.tensor([1, 2, 3, 4, 5])
+        # cumulative_sum = torch.cumsum(x, dim=0)
+        # print(cumulative_sum)
+        # tensor([ 1,  3,  6, 10, 15])
         distcum_scores = torch.cumsum(scores_, dim=-1)  # bs, 8, sl, sl
         disttotal_scores = torch.sum(
             scores_, dim=-1, keepdim=True)  # bs, 8, sl, 1
+        # 计算 x1 和 x2 之间的差异，距离影响
+        # 得到表示位置差异的矩阵 position_effect，用于计算不同位置之间的距离影响
         position_effect = torch.abs(
             x1 - x2)[None, None, :, :].type(torch.FloatTensor).to(device)  # 1, 1, seqlen, seqlen
         # bs, 8, sl, sl positive distance
+        # 计算正数距离dist_scores
         dist_scores = torch.clamp(
             (disttotal_scores - distcum_scores) * position_effect, min=0.)
         dist_scores = dist_scores.sqrt().detach()
@@ -324,6 +358,7 @@ def attention(q, k, v, d_k, mask, dropout, zero_pad, gamma=None):
     # Now after do exp(gamma*distance) and then clamp to 1e-5 to 1e5
     total_effect = torch.clamp(torch.clamp(
         (dist_scores * gamma).exp(), min=1e-5), max=1e5)
+    # 经过距离影响调整后的注意力分数
     scores = scores * total_effect
 
     scores.masked_fill_(mask == 0, -1e32)

@@ -34,8 +34,8 @@ def compute_accuracy(all_target, all_pred):
 def train(net, params, optimizer, q_data, qa_data, pid_data, label):
     net.train()
     pid_flag, model_type = model_isPid_type(params.model)
-    N = int(math.ceil(len(q_data) / params.batch_size)) # 一次epoch中的batch数，2994/24=124
-    print(" train N:", N)
+    N = int(math.ceil(len(q_data) / params.batch_size))  # 一次epoch中的batch数，2994/24=124
+    # print(" train N:", N)
 
     q_data = q_data.T  # Shape: (200,3633)
     qa_data = qa_data.T  # Shape: (200,3633)
@@ -112,8 +112,8 @@ def train(net, params, optimizer, q_data, qa_data, pid_data, label):
         target_nopadding = target[nopadding_index]
         pred_list.append(pred_nopadding)
         target_list.append(target_nopadding)
-        N_count+=1
-        print("N_count:", N_count)
+        N_count += 1
+        # print("N_count:", N_count)
 
     all_pred = np.concatenate(pred_list, axis=0)
     all_target = np.concatenate(target_list, axis=0)
@@ -129,7 +129,7 @@ def test(net, params, optimizer, q_data, qa_data, pid_data, label):
     net.eval()
     pid_flag, model_type = model_isPid_type(params.model)
     N = int(math.ceil(float(len(q_data)) / float(params.batch_size)))
-    print("test N:", N)
+    # print("test N:", N)
     q_data = q_data.T  # Shape: (200,3633)
     qa_data = qa_data.T  # Shape: (200,3633)
     if pid_flag:
