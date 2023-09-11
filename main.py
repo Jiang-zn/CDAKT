@@ -132,7 +132,7 @@ if __name__ == '__main__':
 
     # Common parameters
     parser.add_argument('--optim', type=str, default='adam', help='Default Optimizer')
-    parser.add_argument('--batch_size', type=int, default=32, help='the batch size')
+    parser.add_argument('--batch_size', type=int, default=24, help='the batch size')
     parser.add_argument('--lr', type=float, default=1e-5, help='learning rate')
     parser.add_argument('--maxgradnorm', type=float, default=-1, help='maximum gradient norm')
     parser.add_argument('--final_fc_dim', type=int, default=512, help='hidden state dim for final fc layer')
@@ -161,9 +161,9 @@ if __name__ == '__main__':
     parser.add_argument('--lamda_w2', type=float, default=0.1)
 
     # Datasets and Model
-    parser.add_argument('--model', type=str, default='akt_pid',
+    parser.add_argument('--model', type=str, default='akt_cid',
                         help="combination of akt/dkvmn/dkt, pid/cid separated by underscore '_'. For example tf_pid")
-    parser.add_argument('--dataset', type=str, default="assist2009_pid")
+    parser.add_argument('--dataset', type=str, default="assist2015")
 
     params = parser.parse_args()
     dataset = params.dataset
@@ -224,15 +224,24 @@ if __name__ == '__main__':
                           params.data_name + "_train" + str(filenums) + ".csv"
         valid_data_path = params.data_dir + "/" + \
                           params.data_name + "_valid" + str(filenums) + ".csv"
+        print("\n")
+        if dataset in {"assist2009_pid"}:
+            print('now is the ', filenums, 'th file of assist2009_pid')
+        if dataset in {"assist2017_pid"}:
+            print('now is the ', filenums, 'th file of assist2017_pid')
+        if dataset in {"assist2015"}:
+            print('now is the ', filenums, 'th file of assist2015')
+        if dataset in {"statics"}:
+            print('now is the ', filenums, 'th file of statics')
 
         train_q_data, train_qa_data, train_pid = dat.load_data(train_data_path)
         valid_q_data, valid_qa_data, valid_pid = dat.load_data(valid_data_path)
 
         print("\n")
         print("train_q_data.shape", train_q_data.shape)
-        print("train_qa_data.shape", train_qa_data.shape)
+        # print("train_qa_data.shape", train_qa_data.shape)
         print("valid_q_data.shape", valid_q_data.shape)  # (1566, 200)
-        print("valid_qa_data.shape", valid_qa_data.shape)  # (1566, 200)
+        # print("valid_qa_data.shape", valid_qa_data.shape)  # (1566, 200)
         print("\n")
         # Train and get the best episode
         best_epoch = train_one_dataset(params, file_name, train_q_data, train_qa_data, train_pid, valid_q_data,

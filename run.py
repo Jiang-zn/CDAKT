@@ -6,6 +6,7 @@ from utils import model_isPid_type
 
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device = torch.cuda.set_device(0)
+
 transpose_data_model = {'akt'}
 
 

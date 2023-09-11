@@ -12,6 +12,7 @@ import numpy as np
 device = torch.cuda.set_device(0)
 
 
+
 class Dim(IntEnum):
     batch = 0
     seq = 1
@@ -113,21 +114,23 @@ class AKT(nn.Module):
         # no_master_total中dim=1维度的值依次由1到200
         no_master_total = torch.cumsum(torch.ones_like(q_data), dim=1)
         # output转换为0至1之间的概率值
-        output = torch.sigmoid(output)
+        # output = torch.sigmoid(output)
 
-        correct_answers = (target == 1).float()
         dist = dist.squeeze(dim=-1)
         diff = diff.squeeze(dim=-1)
         output = output.squeeze(dim=-1)
+        correct_answers = (target == 1).float()
         no_master = (output <= 0.5).float()
         no_master_right = torch.cumsum(correct_answers * no_master, dim=1)  # 回答正确的情况*相应时刻未掌握知识点情况，沿时间步累积
         guessing_rate = torch.div(no_master_right, no_master_total)
 
         # 预测结果计算公式
         # P=g*(1-dist)+(1-g)*sigmoid(-1.7dist(θ-diff))
-        P = guessing_rate * (1 - dist) + (1 - guessing_rate) * torch.sigmoid(output - diff)
+        P = guessing_rate  + (1 - guessing_rate) * torch.sigmoid(-1.7*(dist*(output - diff)))
+        # P = torch.sigmoid(-1.7*(dist*(output - diff)))
+        # P = guessing_rate + (1 - guessing_rate) * output
         labels = target.reshape(-1)
-        m = nn.Sigmoid()
+        # m = nn.Sigmoid()
         # preds = (output.reshape(-1))  # logit
         preds = (P.reshape(-1))  # logit
         mask = labels > -0.9
@@ -135,7 +138,7 @@ class AKT(nn.Module):
         masked_preds = preds[mask]
         loss = nn.BCEWithLogitsLoss(reduction='none')
         output = loss(masked_preds, masked_labels)
-        return output.sum() + c_reg_loss, m(preds), mask.sum()
+        return output.sum() + c_reg_loss, preds, mask.sum()
 
 
 class Architecture(nn.Module):

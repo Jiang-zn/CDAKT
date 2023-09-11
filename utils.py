@@ -9,8 +9,10 @@ from akt import AKT
 # from dkvmn import DKVMN
 # from dkt import DKT
 # from dktplus import DKTPlus
+
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device = torch.cuda.set_device(0)
+
 
 
 def try_makedirs(path_):
