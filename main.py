@@ -14,8 +14,8 @@ from utils import try_makedirs, load_model, get_file_name_identifier
 import os
 
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device = torch.cuda.set_device(0)
 
+device = torch.cuda.set_device(0)
 
 # assert torch.cuda.is_available(), "No Cuda available, AssertionError"
 
@@ -49,7 +49,7 @@ def train_one_dataset(params, file_name, train_q_data, train_qa_data, train_pid,
             model, params, optimizer, valid_q_data, valid_qa_data, valid_pid, label='Valid')
 
         print('epoch', idx + 1)
-        print("valid_auc\t", valid_auc, "\ttrain_auc\t", train_auc)
+        # print("valid_auc\t", valid_auc, "\ttrain_auc\t", train_auc)
         print("valid_accuracy\t", valid_accuracy, "\ttrain_accuracy\t", train_accuracy)
         print("valid_loss\t", valid_loss, "\ttrain_loss\t", train_loss)
         print("time\t", time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - start_time)))
@@ -110,7 +110,7 @@ def test_one_dataset(params, file_name, test_q_data, test_qa_data, test_pid, bes
 
     test_loss, test_accuracy, test_auc = test(
         model, params, None, test_q_data, test_qa_data, test_pid, label='Test')
-    print("\ntest_auc\t", test_auc)
+    # print("\ntest_auc\t", test_auc)
     print("test_accuracy\t", test_accuracy)
     print("test_loss\t", test_loss)
 
@@ -161,9 +161,9 @@ if __name__ == '__main__':
     parser.add_argument('--lamda_w2', type=float, default=0.1)
 
     # Datasets and Model
-    parser.add_argument('--model', type=str, default='akt_cid',
+    parser.add_argument('--model', type=str, default='akt_pid',
                         help="combination of akt/dkvmn/dkt, pid/cid separated by underscore '_'. For example tf_pid")
-    parser.add_argument('--dataset', type=str, default="assist2015")
+    parser.add_argument('--dataset', type=str, default="assist2009_pid")
 
     params = parser.parse_args()
     dataset = params.dataset
