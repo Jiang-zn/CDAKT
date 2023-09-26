@@ -11,6 +11,7 @@ from akt import AKT
 # from dktplus import DKTPlus
 
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# device = torch.cuda.set_device(2)
 device = torch.cuda.set_device(0)
 
 
