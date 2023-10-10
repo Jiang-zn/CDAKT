@@ -13,7 +13,6 @@ import numpy as np
 device = torch.cuda.set_device(0)
 
 
-
 class Dim(IntEnum):
     batch = 0
     seq = 1
@@ -102,39 +101,41 @@ class AKT(nn.Module):
         # BS.seqlen,d_model
         # Pass to the decoder
         # output shape BS,seqlen,d_model or d_model//2
-        dist = self.distout(q_embed_data)  # [24,200,1]
-        diff = self.diffout(qa_embed_data)  # [24,200,1]
         d_output = self.model(q_embed_data, qa_embed_data)  # [24,200,256]
-
 
         concat_q = torch.cat([d_output, q_embed_data], dim=-1)  # [24,200,512]
         output = self.out(concat_q)  # [24,200,1]，知识掌握情况θ
+
+        dist = self.distout(q_embed_data)  # [24,200,1]
+        diff = self.diffout(qa_embed_data)  # [24,200,1]
+
         # 计算猜测率g=no_master_right/no_master_total
-        # 没有掌握知识点情况下回答正确的次数no_master_right,对每一个时刻，都计算先前时刻的情况
-        # 没有掌握知识点情况下的总回答次数no_master_total
-        no_master_right = torch.empty_like(q_data)  # 假设 no_master_right 的形状
-        no_master_total = torch.empty_like(q_data)  # 假设 no_master_total 的形状
-        # no_master_total中dim=1维度的值依次由1到200
-        no_master_total = torch.cumsum(torch.ones_like(q_data), dim=1)
-        # output转换为0至1之间的概率值
-        test_out = torch.sigmoid(output)
-        test_out = test_out.squeeze(dim=-1)
-        guessing_rate = 1-test_out
+        no_master_right = torch.empty_like(q_data)  # 没有掌握知识点情况下回答正确的次数no_master_right,对每一个时刻，都计算先前时刻的情况
+        no_master_total = torch.empty_like(q_data)  # 没有掌握知识点情况下的总回答次数no_master_total
+        no_master_total = torch.cumsum(torch.ones_like(q_data), dim=1)  # no_master_total中dim=1维度的值依次由1到200
+        # test_out = torch.sigmoid(output) # output转换为0至1之间的概率值
+        # test_out = test_out.squeeze(dim=-1)
+        # guessing_rate = 1-test_out
         dist = dist.squeeze(dim=-1)
         diff = diff.squeeze(dim=-1)
         output = output.squeeze(dim=-1)
-        # # correct_answers = (target == 1).float()
-        # # no_master = (output <= 0.5).float()
-        # # no_master_right = torch.cumsum(correct_answers * no_master, dim=1)  # 回答正确的情况*相应时刻未掌握知识点情况，沿时间步累积
-        # # guessing_rate = torch.div(no_master_right, no_master_total)
-        P = guessing_rate + (1 - guessing_rate) * torch.sigmoid((-dist)*(output - diff))
+        correct_answers = (target == 1).float()
+        no_master = (output <= 0.5).float()
+        no_master_right = torch.cumsum(correct_answers * no_master, dim=1)  # 回答正确的情况*相应时刻未掌握知识点情况，沿时间步累积
+        guessing_rate = torch.div(no_master_right, no_master_total)
+        guessing_weight = torch.nn.Parameter(torch.tensor(1.0))
 
+        logits = dist * (output - diff)
         # # 预测结果计算公式
-        # # P=g*(1-dist)+(1-g)*sigmoid(-dist(θ-diff))
-        # P = guessing_rate  + (1 - guessing_rate) * torch.sigmoid(dist*(output - diff))
-        # P = torch.sigmoid((-1.7)*dist*(output - diff)))
-        # P = guessing_rate + (1 - guessing_rate) * torch.sigmoid((-dist)*(output - diff)))
-        # P = torch.sigmoid((-dist)*(output - diff)))
+        # # P=g+(1-g)*sigmoid(-dist(θ-diff))
+        # P = guessing_rate + (1 - guessing_rate) * torch.sigmoid((-dist)*(output - diff))
+        # P = torch.sigmoid((-dist)*(output - diff))
+        # P = guessing_rate + (1 - guessing_rate) * torch.sigmoid(((-1.7)*dist)*(output - diff))
+        # P = torch.sigmoid(((-1.7)*dist)*(output - diff))
+
+        # # P=g+(1-g)*sigmoid(-dist(θ-diff))
+        P = (1-guessing_rate)*torch.sigmoid(logits) + guessing_rate
+
         labels = target.reshape(-1)
         # m = nn.Sigmoid()
         # preds = (output.reshape(-1))  # logit
@@ -329,10 +330,11 @@ class MultiHeadAttention(nn.Module):
 
 def attention(q, k, v, d_k, mask, dropout, zero_pad, gamma=None):
     """
-    This is called by Multi-head atention object to find the values.
+    这是由Multi-head atenation对象调用以查找值
+    q,k,v是查询，键和值的输入张量.d_k是键的维度，mask是掩码无效位置的张量
+    dropout用来正则化，zero_pad指示是否需要零填充，gamma是缩放参数
     """
-    scores = torch.matmul(q, k.transpose(-2, -1)) / \
-             math.sqrt(d_k)  # BS, 8, seqlen, seqlen
+    scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(d_k)  # BS, 8, seqlen, seqlen
     bs, head, seqlen = scores.size(0), scores.size(1), scores.size(2)
     # 这两个矩阵的每个元素代表了序列中的位置信息
     # x1 是一个递增的序列，x2 是 x1 的转置
@@ -343,7 +345,7 @@ def attention(q, k, v, d_k, mask, dropout, zero_pad, gamma=None):
     with torch.no_grad():
         scores_ = scores.masked_fill(mask == 0, -1e32)
         scores_ = F.softmax(scores_, dim=-1)  # BS,8,seqlen,seqlen
-        scores_ = scores_ * mask.float().to(device)
+        scores_ = scores_ * mask.float().to(device) # 上三角掩码
         # torch.cumsum(input, dim, dtype=None) 计算输入张量的累积和以及总和
         # 示例
         # x = torch.tensor([1, 2, 3, 4, 5])
