@@ -54,6 +54,7 @@ class AKT(nn.Module):
         self.model = Architecture(n_question=n_question, n_blocks=n_blocks, n_heads=n_heads, dropout=dropout,
                                   d_model=d_model, d_feature=d_model / n_heads, d_ff=d_ff, kq_same=self.kq_same,
                                   model_type=self.model_type)
+        # distinct区分度，difficult难度
         self.distout = nn.Sequential(
             nn.Linear(embed_l, 1), nn.ReLU(), nn.Dropout(self.dropout),
         )
@@ -109,6 +110,13 @@ class AKT(nn.Module):
         dist = self.distout(q_embed_data)  # [24,200,1]
         diff = self.diffout(qa_embed_data)  # [24,200,1]
 
+        # 算每个学生对每一道题的水平，Ability(j)=∑i |Nij| (xji==1) / |Nij|  ,|Nij|>0
+        # |Nij|表示学生j作答题目i的次数，xji表示学生j对题目i的回答情况
+        # 当学生对每一道题目的水平大于平均水平还答错，失误率si就位学生j错误回答题目i的概率
+        # si=∑i |Nij| (xji==0) / |Nij|  ,|Nij|>0
+        # 当学生对每一道题目的水平小于平均水平还答对，猜测率gi就为学生j正确回答题目i的概率
+        # gi=∑i |Nij| (xji==1) / |Nij|  ,|Nij|>0
+
         # 计算猜测率g=no_master_right/no_master_total
         no_master_right = torch.empty_like(q_data)  # 没有掌握知识点情况下回答正确的次数no_master_right,对每一个时刻，都计算先前时刻的情况
         no_master_total = torch.empty_like(q_data)  # 没有掌握知识点情况下的总回答次数no_master_total
@@ -125,7 +133,7 @@ class AKT(nn.Module):
         guessing_rate = torch.div(no_master_right, no_master_total)
         guessing_weight = torch.nn.Parameter(torch.tensor(1.0))
 
-        logits = dist * (output - diff)
+        logits = dist*(output)
         # # 预测结果计算公式
         # # P=g+(1-g)*sigmoid(-dist(θ-diff))
         # P = guessing_rate + (1 - guessing_rate) * torch.sigmoid((-dist)*(output - diff))
@@ -134,7 +142,7 @@ class AKT(nn.Module):
         # P = torch.sigmoid(((-1.7)*dist)*(output - diff))
 
         # # P=g+(1-g)*sigmoid(-dist(θ-diff))
-        P = (1-guessing_rate)*torch.sigmoid(logits) + guessing_rate
+        P = (1 - guessing_rate) * torch.sigmoid(logits) + guessing_rate
 
         labels = target.reshape(-1)
         # m = nn.Sigmoid()
@@ -162,6 +170,7 @@ class Architecture(nn.Module):
         self.model_type = model_type
 
         if model_type in {'akt'}:
+            # blocks_1处理qas，blocks_2处理q
             self.blocks_1 = nn.ModuleList([
                 TransformerLayer(d_model=d_model, d_feature=d_model // n_heads,
                                  d_ff=d_ff, dropout=dropout, n_heads=n_heads, kq_same=kq_same)
@@ -189,11 +198,11 @@ class Architecture(nn.Module):
             y = block(mask=1, query=y, key=y, values=y)
         flag_first = True
         for block in self.blocks_2:
-            if flag_first:  # peek current question,允许查看当前时刻的问题
+            if flag_first:  # peek current question
                 x = block(mask=1, query=x, key=x,
                           values=x, apply_pos=False)
                 flag_first = False
-            else:  # dont peek current response，不允许查看当前时刻的响应
+            else:  # dont peek current response，apply past question sequences and past answer sequences
                 x = block(mask=0, query=x, key=x, values=y, apply_pos=True)
                 flag_first = True
         return x
@@ -231,16 +240,14 @@ class TransformerLayer(nn.Module):
             query : Query. In transformer paper it is the input for both encoder and decoder
             key : Keys. In transformer paper it is the input for both encoder and decoder
             Values. In transformer paper it is the input for encoder and  encoded output for decoder (in masked attention part)
-
         Output:
             query: Input gets changed over the layer and returned.
-
         """
 
         seqlen, batch_size = query.size(1), query.size(0)
         nopeek_mask = np.triu(
-            np.ones((1, 1, seqlen, seqlen)), k=mask).astype('uint8')
-        src_mask = (torch.from_numpy(nopeek_mask) == 0).to(device)
+            np.ones((1, 1, seqlen, seqlen)), k=mask).astype('uint8')  # 创建一个上三角二维矩阵，mask=0时，遮挡矩阵的对角线及以下部分（模拟padding）
+        src_mask = (torch.from_numpy(nopeek_mask) == 0).to(device)  # 遮挡矩阵转换为PyTorch张量是一个二元掩码，在后续的注意力计算中屏蔽掉未来信息
         if mask == 0:  # If 0, zero-padding is needed.
             # Calls block.masked_attn_head.forward() method
             query2 = self.masked_attn_head(
@@ -253,8 +260,7 @@ class TransformerLayer(nn.Module):
         query = query + self.dropout1((query2))
         query = self.layer_norm1(query)
         if apply_pos:
-            query2 = self.linear2(self.dropout(
-                self.activation(self.linear1(query))))
+            query2 = self.linear2(self.dropout(self.activation(self.linear1(query))))
             query = query + self.dropout2((query2))
             query = self.layer_norm2(query)
         return query
@@ -284,6 +290,7 @@ class MultiHeadAttention(nn.Module):
         self._reset_parameters()
 
     def _reset_parameters(self):
+        # 初始化模型的参数
         xavier_uniform_(self.k_linear.weight)
         xavier_uniform_(self.v_linear.weight)
         if self.kq_same is False:
@@ -301,7 +308,6 @@ class MultiHeadAttention(nn.Module):
         bs = q.size(0)
 
         # perform linear operation and split into h heads
-
         k = self.k_linear(k).view(bs, -1, self.h, self.d_k)
         if self.kq_same is False:
             q = self.q_linear(q).view(bs, -1, self.h, self.d_k)
@@ -345,7 +351,7 @@ def attention(q, k, v, d_k, mask, dropout, zero_pad, gamma=None):
     with torch.no_grad():
         scores_ = scores.masked_fill(mask == 0, -1e32)
         scores_ = F.softmax(scores_, dim=-1)  # BS,8,seqlen,seqlen
-        scores_ = scores_ * mask.float().to(device) # 上三角掩码
+        scores_ = scores_ * mask.float().to(device)  # 上三角掩码
         # torch.cumsum(input, dim, dtype=None) 计算输入张量的累积和以及总和
         # 示例
         # x = torch.tensor([1, 2, 3, 4, 5])

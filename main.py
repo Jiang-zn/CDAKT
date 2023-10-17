@@ -25,7 +25,8 @@ def train_one_dataset(params, file_name, train_q_data, train_qa_data, train_pid,
     # ================================== model initialization ==================================
 
     model = load_model(params)
-    optimizer = torch.optim.Adam(model.parameters(), lr=params.lr, betas=(0.9, 0.999), eps=1e-8)
+    l2_lambda = params.l2
+    optimizer = torch.optim.Adam(model.parameters(), lr=params.lr, betas=(0.9, 0.999), eps=1e-8,weight_decay=l2_lambda)
 
     print("\n")
 
@@ -45,11 +46,13 @@ def train_one_dataset(params, file_name, train_q_data, train_qa_data, train_pid,
         train_loss, train_accuracy, train_auc = train(
             model, params, optimizer, train_q_data, train_qa_data, train_pid, label='Train')
         # Validation step
+        # 验证是模型在给定参数下的性能评估，但是有可能在训练集中得到好结果但是在验证集中没有好结果
+        # 所以这里使用了optimizer为了找到能够满足在验证集中表现好的参数
         valid_loss, valid_accuracy, valid_auc = test(
             model, params, optimizer, valid_q_data, valid_qa_data, valid_pid, label='Valid')
 
         print('epoch', idx + 1)
-        # print("valid_auc\t", valid_auc, "\ttrain_auc\t", train_auc)
+        print("valid_auc\t", valid_auc, "\ttrain_auc\t", train_auc)
         print("valid_accuracy\t", valid_accuracy, "\ttrain_accuracy\t", train_accuracy)
         print("valid_loss\t", valid_loss, "\ttrain_loss\t", train_loss)
         print("time\t", time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - start_time)))
@@ -110,7 +113,7 @@ def test_one_dataset(params, file_name, test_q_data, test_qa_data, test_pid, bes
 
     test_loss, test_accuracy, test_auc = test(
         model, params, None, test_q_data, test_qa_data, test_pid, label='Test')
-    # print("\ntest_auc\t", test_auc)
+    print("\ntest_auc\t", test_auc)
     print("test_accuracy\t", test_accuracy)
     print("test_loss\t", test_loss)
 
@@ -169,7 +172,7 @@ if __name__ == '__main__':
     dataset = params.dataset
 
     if dataset in {"assist2009_pid"}:
-        params.batch_size = 24
+        params.batch_size = 64
         params.n_question = 110
         params.seqlen = 200
         params.n_pid = 16891
@@ -219,34 +222,59 @@ if __name__ == '__main__':
     for item_ in file_name_identifier:
         file_name = file_name + item_[0] + str(item_[1])
 
-    for filenums in range(1, 6):
-        train_data_path = params.data_dir + "/" + \
-                          params.data_name + "_train" + str(filenums) + ".csv"
-        valid_data_path = params.data_dir + "/" + \
-                          params.data_name + "_valid" + str(filenums) + ".csv"
-        print("\n")
-        if dataset in {"assist2009_pid"}:
-            print('now is the ', filenums, 'th file of assist2009_pid')
-        if dataset in {"assist2017_pid"}:
-            print('now is the ', filenums, 'th file of assist2017_pid')
-        if dataset in {"assist2015"}:
+    if dataset in {"assist2009_pid", "assist2017_pid", "statics"}:
+        for filenums in range(1, 6):
+            train_data_path = params.data_dir + "/" + \
+                              params.data_name + "_train" + str(filenums) + ".csv"
+            valid_data_path = params.data_dir + "/" + \
+                              params.data_name + "_valid" + str(filenums) + ".csv"
+            print("\n")
+            if dataset in {"assist2009_pid"}:
+                print('now is the ', filenums, 'th file of assist2009_pid')
+            if dataset in {"assist2017_pid"}:
+                print('now is the ', filenums, 'th file of assist2017_pid')
+            if dataset in {"statics"}:
+                print('now is the ', filenums, 'th file of statics')
+
+            train_q_data, train_qa_data, train_pid = dat.load_data(train_data_path)
+            valid_q_data, valid_qa_data, valid_pid = dat.load_data(valid_data_path)
+
+            print("\n")
+            print("train_q_data.shape", train_q_data.shape)
+            # print("train_qa_data.shape", train_qa_data.shape)
+            print("valid_q_data.shape", valid_q_data.shape)  # (1566, 200)
+            # print("valid_qa_data.shape", valid_qa_data.shape)  # (1566, 200)
+            print("\n")
+            # Train and get the best episode
+            best_epoch = train_one_dataset(params, file_name, train_q_data, train_qa_data, train_pid, valid_q_data,
+                                           valid_qa_data, valid_pid)
+            test_data_path = params.data_dir + "/" + params.data_name + "_test" + str(params.train_set) + ".csv"
+
+            test_q_data, test_qa_data, test_index = dat.load_data(test_data_path)
+            test_one_dataset(params, file_name, test_q_data, test_qa_data, test_index, best_epoch)
+    elif dataset in {"assist2015"}:
+        for filenums in range(1, 21):
+            train_data_path = params.data_dir + "/" + \
+                              params.data_name + "_train" + str(filenums) + ".csv"
+            valid_data_path = params.data_dir + "/" + \
+                              params.data_name + "_valid" + str(filenums) + ".csv"
+            print("\n")
             print('now is the ', filenums, 'th file of assist2015')
-        if dataset in {"statics"}:
-            print('now is the ', filenums, 'th file of statics')
 
-        train_q_data, train_qa_data, train_pid = dat.load_data(train_data_path)
-        valid_q_data, valid_qa_data, valid_pid = dat.load_data(valid_data_path)
+            train_q_data, train_qa_data, train_pid = dat.load_data(train_data_path)
+            valid_q_data, valid_qa_data, valid_pid = dat.load_data(valid_data_path)
 
-        print("\n")
-        print("train_q_data.shape", train_q_data.shape)
-        # print("train_qa_data.shape", train_qa_data.shape)
-        print("valid_q_data.shape", valid_q_data.shape)  # (1566, 200)
-        # print("valid_qa_data.shape", valid_qa_data.shape)  # (1566, 200)
-        print("\n")
-        # Train and get the best episode
-        best_epoch = train_one_dataset(params, file_name, train_q_data, train_qa_data, train_pid, valid_q_data,
-                                       valid_qa_data, valid_pid)
-        test_data_path = params.data_dir + "/" + params.data_name + "_test" + str(params.train_set) + ".csv"
+            print("\n")
+            print("train_q_data.shape", train_q_data.shape)
+            # print("train_qa_data.shape", train_qa_data.shape)
+            print("valid_q_data.shape", valid_q_data.shape)  # (1566, 200)
+            # print("valid_qa_data.shape", valid_qa_data.shape)  # (1566, 200)
+            print("\n")
+            # Train and get the best episode
+            best_epoch = train_one_dataset(params, file_name, train_q_data, train_qa_data, train_pid, valid_q_data,
+                                           valid_qa_data, valid_pid)
+            test_data_path = params.data_dir + "/" + params.data_name + "_test" + str(params.train_set) + ".csv"
 
-        test_q_data, test_qa_data, test_index = dat.load_data(test_data_path)
-        test_one_dataset(params, file_name, test_q_data, test_qa_data, test_index, best_epoch)
+            test_q_data, test_qa_data, test_index = dat.load_data(test_data_path)
+            test_one_dataset(params, file_name, test_q_data, test_qa_data, test_index, best_epoch)
+

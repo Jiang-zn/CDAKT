@@ -3,6 +3,7 @@ import torch
 import math
 from sklearn import metrics
 from utils import model_isPid_type
+from collections import Counter
 
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # device = torch.cuda.set_device(2)
@@ -37,8 +38,6 @@ def train(net, params, optimizer, q_data, qa_data, pid_data, label):
     net.train()
     pid_flag, model_type = model_isPid_type(params.model)
     N = int(math.ceil(len(q_data) / params.batch_size))  # 一次epoch中的batch数，2994/24=124
-    # print(" train N:", N)
-
     q_data = q_data.T  # Shape: (200,3633)
     qa_data = qa_data.T  # Shape: (200,3633)
     # Shuffle the data，将题目数据和答案数据打乱顺序，增加数据随机性，减小模型过拟合的风险
@@ -46,7 +45,6 @@ def train(net, params, optimizer, q_data, qa_data, pid_data, label):
     np.random.shuffle(shuffled_ind)
     q_data = q_data[:, shuffled_ind]
     qa_data = qa_data[:, shuffled_ind]
-
     if pid_flag:
         pid_data = pid_data.T
         pid_data = pid_data[:, shuffled_ind]
@@ -85,6 +83,27 @@ def train(net, params, optimizer, q_data, qa_data, pid_data, label):
         target_1 = np.floor(target)
         el = np.sum(target_1 >= -.9)
         element_count += el
+        # all_Ability = []
+        # single_count = Counter([x for x in input_q.flatten() if x != 0])  # single_count表示题目i总作答的次数
+        # single_right = Counter([x - 110 for x in input_qa.flatten() if x > 110 and x != 0]) # single_right表示题目i作对的次数
+        # Avg = {key: single_right[key] / single_count[key] for key in single_count.keys()} # Avg表示在所有回答过题目i的记录中答对的次数所占的比例 Avg(i)=∑j |Ni| (xji==1) / |Ni|
+        # # 求input_q中每个batch_size中每一个值出现的次数，即被回答的次数
+        # for count_i in range(params.batch_size):
+        #     # 统计学生对题目i的回答情况总数
+        #     learner_count = Counter([x for x in input_q[count_i] if x != 0]) #Counter({30.0: 21, 47.0: 8})
+        #     # 学生对题目i的作答情况（做错的）
+        #     learner_Count = Counter([x for x in input_qa[count_i] if x <110 and x != 0]) #Counter({47.0: 8, 30.0: 5})
+        #     # 求学生的水平，learner_Count中的值/learner_count中对应位置的值
+        #     Ability_single_wrong = {key: (learner_count[key]-learner_Count[key]) / learner_count[key] for key in learner_Count.keys()}
+        #     Ability_single_right = {key: 1 - value for key, value in Ability_single_wrong.items()}
+        #     all_Ability.append(Ability_single_right)
+        # print(all_Ability)
+
+        # if 学生某个问题的知识水平 ≥ 题目的知识水平:
+            # 失误率si=Ability_single_wrong
+        # if 学生某个问题的知识水平 < 题目的知识水平:
+            # 猜测率gi=Ability_single_right
+
         input_q = torch.from_numpy(input_q).long().to(device)
         input_qa = torch.from_numpy(input_qa).long().to(device)
         target = torch.from_numpy(target_1).float().to(device)
@@ -95,6 +114,7 @@ def train(net, params, optimizer, q_data, qa_data, pid_data, label):
             loss, pred, true_ct = net(input_q, input_qa, target, input_pid)
         else:
             loss, pred, true_ct = net(input_q, input_qa, target)
+
         pred = pred.detach().cpu().numpy()  # (seqlen * batch_size, 1)
         loss.backward()
         true_el += true_ct.cpu().numpy()
