@@ -108,7 +108,7 @@ class AKT(nn.Module):
         output = self.out(concat_q)  # [24,200,1]，知识掌握情况θ
 
         dist = self.distout(q_embed_data)  # [24,200,1]
-        diff = self.diffout(qa_embed_data)  # [24,200,1]
+        diff = self.diffout(qa_embed_data)  # [24,200,1]#难度嵌入不应该在这里加
 
         # 算每个学生对每一道题的水平，Ability(j)=∑i |Nij| (xji==1) / |Nij|  ,|Nij|>0
         # |Nij|表示学生j作答题目i的次数，xji表示学生j对题目i的回答情况
@@ -125,7 +125,7 @@ class AKT(nn.Module):
         # test_out = test_out.squeeze(dim=-1)
         # guessing_rate = 1-test_out
         dist = dist.squeeze(dim=-1)
-        diff = diff.squeeze(dim=-1)
+        # diff = diff.squeeze(dim=-1)
         output = output.squeeze(dim=-1)
         correct_answers = (target == 1).float()
         no_master = (output <= 0.5).float()
@@ -133,7 +133,7 @@ class AKT(nn.Module):
         guessing_rate = torch.div(no_master_right, no_master_total)
         guessing_weight = torch.nn.Parameter(torch.tensor(1.0))
 
-        logits = dist*(output)
+        logits = dist * (output)
         # # 预测结果计算公式
         # # P=g+(1-g)*sigmoid(-dist(θ-diff))
         # P = guessing_rate + (1 - guessing_rate) * torch.sigmoid((-dist)*(output - diff))
@@ -161,10 +161,10 @@ class Architecture(nn.Module):
                  d_ff, n_heads, dropout, kq_same, model_type):
         super().__init__()
         """
-            n_block : number of stacked blocks in the attention
-            d_model : dimension of attention input/output
-            d_feature : dimension of input in each of the multi-head attention part.
-            n_head : number of heads. n_heads*d_feature = d_model
+            n_block : number of stacked blocks in the attention   1
+            d_model : dimension of attention input/output        256
+            d_feature : dimension of input in each of the multi-head attention part.   256/8=32
+            n_head : number of heads. n_heads*d_feature = d_model    8
         """
         self.d_model = d_model
         self.model_type = model_type
@@ -256,7 +256,7 @@ class TransformerLayer(nn.Module):
             # Calls block.masked_attn_head.forward() method
             query2 = self.masked_attn_head(
                 query, key, values, mask=src_mask, zero_pad=False)
-
+        # Residual connection，残差连接 add & norm
         query = query + self.dropout1((query2))
         query = self.layer_norm1(query)
         if apply_pos:
@@ -284,7 +284,7 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.proj_bias = bias
         self.out_proj = nn.Linear(d_model, d_model, bias=bias)
-        self.gammas = nn.Parameter(torch.zeros(n_heads, 1, 1))
+        self.gammas = nn.Parameter(torch.zeros(n_heads, 1, 1))  # 可学习的衰减率参数
         torch.nn.init.xavier_uniform_(self.gammas)
 
         self._reset_parameters()
@@ -353,28 +353,22 @@ def attention(q, k, v, d_k, mask, dropout, zero_pad, gamma=None):
         scores_ = F.softmax(scores_, dim=-1)  # BS,8,seqlen,seqlen
         scores_ = scores_ * mask.float().to(device)  # 上三角掩码
         # torch.cumsum(input, dim, dtype=None) 计算输入张量的累积和以及总和
-        # 示例
         # x = torch.tensor([1, 2, 3, 4, 5])
         # cumulative_sum = torch.cumsum(x, dim=0)
-        # print(cumulative_sum)
         # tensor([ 1,  3,  6, 10, 15])
         distcum_scores = torch.cumsum(scores_, dim=-1)  # bs, 8, sl, sl
-        disttotal_scores = torch.sum(
-            scores_, dim=-1, keepdim=True)  # bs, 8, sl, 1
-        # 计算 x1 和 x2 之间的差异，距离影响
+        disttotal_scores = torch.sum(scores_, dim=-1, keepdim=True)  # bs, 8, sl, 1
+        # 计算 x1 和 x2 之间的差异，距离影响，|t-τ|
         # 得到表示位置差异的矩阵 position_effect，用于计算不同位置之间的距离影响
         position_effect = torch.abs(
             x1 - x2)[None, None, :, :].type(torch.FloatTensor).to(device)  # 1, 1, seqlen, seqlen
-        # bs, 8, sl, sl positive distance
-        # 计算正数距离dist_scores
-        dist_scores = torch.clamp(
-            (disttotal_scores - distcum_scores) * position_effect, min=0.)
+        dist_scores = torch.clamp((disttotal_scores - distcum_scores) * position_effect, min=0.) # bs, 8, sl, sl
         dist_scores = dist_scores.sqrt().detach()
     m = nn.Softplus()
     gamma = -1. * m(gamma).unsqueeze(0)  # 1,8,1,1
     # Now after do exp(gamma*distance) and then clamp to 1e-5 to 1e5
-    total_effect = torch.clamp(torch.clamp(
-        (dist_scores * gamma).exp(), min=1e-5), max=1e5)
+    # total_effect=exp(-θ*d(t-τ))
+    total_effect = torch.clamp(torch.clamp((dist_scores * gamma).exp(), min=1e-5), max=1e5)
     # 经过距离影响调整后的注意力分数
     scores = scores * total_effect
 
