@@ -50,6 +50,7 @@ class AKT(nn.Module):
         else:
             self.qa_embed = nn.Embedding(2, embed_l)
 
+
         # Architecture Object. It contains stack of attention block
         self.model = Architecture(n_question=n_question, n_blocks=n_blocks, n_heads=n_heads, dropout=dropout,
                                   d_model=d_model, d_feature=d_model / n_heads, d_ff=d_ff, kq_same=self.kq_same,
